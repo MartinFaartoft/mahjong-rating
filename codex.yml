@@ -1,0 +1,7 @@
+service: rating
+domain: rating.ftft.dk
+type: app
+port: 8080
+database:
+  type: postgres
+  version: "16"

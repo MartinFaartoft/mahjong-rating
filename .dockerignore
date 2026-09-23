@@ -1,0 +1,10 @@
+bin/
+obj/
+.vs/
+.git/
+.github/
+docker-compose.dev.yml
+scripts/
+Makefile
+README.md
+*.md
