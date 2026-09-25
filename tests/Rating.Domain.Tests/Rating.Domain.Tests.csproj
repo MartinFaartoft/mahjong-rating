@@ -21,6 +21,7 @@
 
   <ItemGroup>
     <None Update="data\mcr_games_full.json" CopyToOutputDirectory="PreserveNewest" />
+    <None Update="data\riichi_games_full.json" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
 </Project>

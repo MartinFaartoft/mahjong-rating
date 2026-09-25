@@ -6,33 +6,43 @@ using Rating.Domain.Services;
 namespace Rating.Domain.Tests;
 
 /// <summary>
-/// Replays the full historical MCR game archive scraped from mahjongdk.dk
-/// (10k+ games from 2004 to today) through <see cref="RatingCalculator"/>
-/// and asserts that each per-player rating matches the value the legacy
-/// system produced.
+/// Replays the full historical MCR and Riichi game archives scraped from
+/// mahjongdk.dk (10k+ games per ruleset, 2001-2026) through
+/// <see cref="RatingCalculator"/> and asserts every per-player rating
+/// matches the legacy system's output.
 ///
-/// This is our ground-truth check: if the calculator formula, ordering,
-/// or precision handling ever regresses, this test surfaces it immediately.
-/// The dataset is committed under <c>data/mcr_games_full.json</c>; source:
-/// https://raw.githubusercontent.com/MartinFaartoft/MahjongDkScraper/refs/heads/main/data/mcr_games_full.json
+/// This is our ground-truth check: if the calculator formula, ordering, or
+/// precision handling ever regresses, this test surfaces it immediately.
+/// Datasets committed under <c>data/</c>; source:
+/// https://github.com/MartinFaartoft/MahjongDkScraper/tree/main/data
 /// </summary>
 public sealed class LegacyDatasetReplayTests
 {
     // Legacy stores ratings as double (~15 significant digits). We compute
-    // in decimal (~28 digits). Empirically all games agree to ~5e-12; use
-    // 1e-9 to leave headroom for the JSON serialization round-trip.
+    // in decimal (~28 digits). Empirically all games agree to well under
+    // 1e-9; use 1e-9 as the tolerance for both per-game and running-replay
+    // comparisons. Riichi ratings are much larger in magnitude (thousands
+    // vs tens) so we scale by max(1, |legacy|) to keep the comparison a
+    // relative tolerance.
     private const decimal PerGameTolerance = 0.000000001m; // 1e-9
 
-    /// <summary>
-    /// For each game, feeds the dataset's own <c>OldRating</c> for each
-    /// player and asserts the calculator reproduces the dataset's
-    /// <c>NewRating</c>. This isolates the per-game formula (independent of
-    /// error accumulation).
-    /// </summary>
-    [Fact]
-    public void PerGameFormula_MatchesLegacyForEveryGame()
+    public static IEnumerable<object[]> Datasets => new[]
     {
-        var games = LoadDataset();
+        new object[] { Ruleset.Mcr, "mcr_games_full.json" },
+        new object[] { Ruleset.Riichi, "riichi_games_full.json" },
+    };
+
+    /// <summary>
+    /// For each game, feed the dataset's own <c>OldRating</c> for each
+    /// player and assert the calculator reproduces the dataset's
+    /// <c>NewRating</c>. This isolates the per-game formula (independent
+    /// of error accumulation).
+    /// </summary>
+    [Theory]
+    [MemberData(nameof(Datasets))]
+    public void PerGameFormula_MatchesLegacyForEveryGame(Ruleset ruleset, string dataFile)
+    {
+        var games = LoadDataset(dataFile);
         var deviations = new List<(string GameId, string Player, decimal Diff)>();
 
         foreach (var g in games)
@@ -46,11 +56,13 @@ public sealed class LegacyDatasetReplayTests
                 scores[ids[i]] = g.Players[i].Score;
             }
 
-            var next = RatingCalculator.ComputeNewRatings(Ruleset.Mcr, g.NumberOfWinds, oldRatings, scores);
+            var next = RatingCalculator.ComputeNewRatings(ruleset, g.NumberOfWinds, oldRatings, scores);
 
             for (var i = 0; i < g.Players.Count; i++)
             {
-                var diff = Math.Abs(next[ids[i]] - (decimal)g.Players[i].NewRating);
+                var expected = (decimal)g.Players[i].NewRating;
+                var scale = Math.Max(1m, Math.Abs(expected));
+                var diff = Math.Abs(next[ids[i]] - expected) / scale;
                 if (diff > PerGameTolerance)
                 {
                     deviations.Add((g.Id, g.Players[i].Name, diff));
@@ -67,17 +79,18 @@ public sealed class LegacyDatasetReplayTests
     /// final per-player rating matches the last <c>NewRating</c> observed
     /// for that player in the legacy dataset.
     ///
-    /// Excluded players: legacy has two carry-forward inconsistencies on
-    /// 2026-08-27 where Eskild Theodor Middelboe's <c>OldRating</c> in one
-    /// game does not match his <c>NewRating</c> from the previous game
-    /// (differences of ~1.06 and ~-0.72). These are legacy data quirks,
-    /// not formula deviations. Any player who ever sat at a table with a
-    /// tainted opponent inherits the taint.
+    /// Excluded players: some legacy datasets contain occasional carry-forward
+    /// inconsistencies where a player's <c>OldRating</c> in a game does not
+    /// equal their <c>NewRating</c> from the immediately previous game. This
+    /// is legacy data noise, not a formula deviation. Any player affected by
+    /// such a discontinuity, and anyone who later sits at their table,
+    /// inherits the taint and is excluded from the final comparison.
     /// </summary>
-    [Fact]
-    public void RunningReplay_ProducesLegacyRatings_ForEveryUntaintedPlayer()
+    [Theory]
+    [MemberData(nameof(Datasets))]
+    public void RunningReplay_ProducesLegacyRatings_ForEveryUntaintedPlayer(Ruleset ruleset, string dataFile)
     {
-        var games = LoadDataset();
+        var games = LoadDataset(dataFile);
 
         var ratings = new Dictionary<string, decimal>(StringComparer.Ordinal);
         var lastLegacyRating = new Dictionary<string, double>(StringComparer.Ordinal);
@@ -85,9 +98,8 @@ public sealed class LegacyDatasetReplayTests
 
         foreach (var g in games)
         {
-            // Same player at two seats occurs in legacy data (one bugged game
-            // in 22 years). Give each seat its own Guid so the calculator
-            // sees distinct keys.
+            // Same player at two seats occurs sporadically in legacy data.
+            // Give each seat its own Guid so the calculator sees distinct keys.
             var ids = new Guid[g.Players.Count];
             var oldRatings = new Dictionary<Guid, decimal>(g.Players.Count);
             var scores = new Dictionary<Guid, int>(g.Players.Count);
@@ -98,18 +110,18 @@ public sealed class LegacyDatasetReplayTests
                 oldRatings[ids[i]] = carried;
                 scores[ids[i]] = g.Players[i].Score;
 
-                // If the legacy dataset's OldRating for this player disagrees
-                // with the value we carried forward from their prior game,
-                // the legacy dataset has an out-of-band rating adjustment we
-                // cannot reproduce. Taint them (and anyone at their table)
-                // going forward.
-                if (Math.Abs(carried - (decimal)g.Players[i].OldRating) > PerGameTolerance)
+                // If the legacy dataset's OldRating disagrees with the value
+                // we carried forward, legacy has an out-of-band rating change
+                // we cannot reproduce; taint the player.
+                var legacyOld = (decimal)g.Players[i].OldRating;
+                var scale = Math.Max(1m, Math.Abs(legacyOld));
+                if (Math.Abs(carried - legacyOld) / scale > PerGameTolerance)
                 {
                     tainted.Add(g.Players[i].Name);
                 }
             }
 
-            var next = RatingCalculator.ComputeNewRatings(Ruleset.Mcr, g.NumberOfWinds, oldRatings, scores);
+            var next = RatingCalculator.ComputeNewRatings(ruleset, g.NumberOfWinds, oldRatings, scores);
 
             var tableTainted = g.Players.Any(p => tainted.Contains(p.Name));
             for (var i = 0; i < g.Players.Count; i++)
@@ -126,20 +138,21 @@ public sealed class LegacyDatasetReplayTests
 
         var mismatches = ratings
             .Where(kv => !tainted.Contains(kv.Key))
-            .Select(kv => (Name: kv.Key, Ours: kv.Value, Legacy: lastLegacyRating[kv.Key]))
-            .Where(t => Math.Abs(t.Ours - (decimal)t.Legacy) > PerGameTolerance)
-            .OrderByDescending(t => Math.Abs(t.Ours - (decimal)t.Legacy))
+            .Select(kv => (Name: kv.Key, Ours: kv.Value, Legacy: (decimal)lastLegacyRating[kv.Key]))
+            .Where(t => Math.Abs(t.Ours - t.Legacy) / Math.Max(1m, Math.Abs(t.Legacy)) > PerGameTolerance)
+            .OrderByDescending(t => Math.Abs(t.Ours - t.Legacy))
             .ToList();
 
         Assert.True(
             mismatches.Count == 0,
-            $"Untainted players diverging from legacy final rating (untainted count = {ratings.Count - tainted.Count}): " +
+            $"[{ruleset}] Untainted players diverging from legacy final rating " +
+            $"(untainted={ratings.Count - tainted.Count}, tainted={tainted.Count}): " +
             string.Join(", ", mismatches.Take(5).Select(m => $"{m.Name} ours={m.Ours} legacy={m.Legacy}")));
     }
 
-    private static List<LegacyGame> LoadDataset()
+    private static List<LegacyGame> LoadDataset(string fileName)
     {
-        var path = Path.Combine(AppContext.BaseDirectory, "data", "mcr_games_full.json");
+        var path = Path.Combine(AppContext.BaseDirectory, "data", fileName);
         Assert.True(File.Exists(path), $"Dataset not found at {path}");
         using var stream = File.OpenRead(path);
         var games = JsonSerializer.Deserialize<List<LegacyGame>>(stream, JsonOpts)!;

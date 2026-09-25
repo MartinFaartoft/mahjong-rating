@@ -37,39 +37,50 @@ public static class RatingCalculator
             throw new ArgumentException("oldRatings and scores must cover the same players.");
         }
 
-        var gl = GameLengthFactor(ruleset, numberOfWinds);
-        // Damping matches the legacy mahjongdk implementation: 40 * game_length_factor + 1.
-        // The +1 offset is a deliberate deviation from the plain-English spec so that the
-        // new system reproduces historical ratings bit-for-bit when the full game history
-        // is replayed.
-        var damp = 40m * gl + 1m;
+        var (glScore, glDamp, diffDenom) = GetFactors(ruleset, numberOfWinds, oldRatings.Count);
+        // Damping matches the legacy mahjongdk implementation: 40 * gl + 1.
+        // The +1 offset is a deliberate deviation from the plain-English spec
+        // so the new system reproduces historical ratings bit-for-bit when
+        // the full game history is replayed.
+        var damp = 40m * glDamp + 1m;
 
-        // game_difficulty = average of participants' old ratings, but the legacy
-        // impl assumed a full 4-seat table when computing the denominator: it
-        // divides by max(4, playerCount) rather than playerCount. For the usual
-        // 4+ seat games this is identical to a plain average; for sub-4-seat
-        // tables (only one such game exists in 22 years of history) the legacy
-        // formula pulls diff toward zero. We preserve the quirk so full replay
-        // matches legacy on every game.
-        var denom = Math.Max(4, oldRatings.Count);
         decimal diff = 0m;
         foreach (var r in oldRatings.Values) diff += r;
-        diff /= denom;
+        diff /= diffDenom;
 
         var result = new Dictionary<Guid, decimal>(oldRatings.Count);
         foreach (var (playerId, old) in oldRatings)
         {
             var score = scores[playerId];
-            var newRating = old + (score * gl + diff - old) / damp;
+            var newRating = old + (score * glScore + diff - old) / damp;
             result[playerId] = newRating;
         }
         return result;
     }
 
-    private static decimal GameLengthFactor(Ruleset ruleset, int numberOfWinds) => ruleset switch
+    /// <summary>
+    /// Returns the per-ruleset legacy factors, reverse-engineered from the
+    /// full mahjongdk game archive (10k+ MCR games, 10k+ Riichi games):
+    /// <list type="bullet">
+    ///   <item>MCR: score and damping both use gl = 4/winds. The difficulty
+    ///     average divides by max(4, playerCount) -- legacy assumed a full
+    ///     4-seat table when computing the average, matters only for a
+    ///     single 3-player game in the archive.</item>
+    ///   <item>Riichi: score uses gl = 2/winds. Damping uses the same gl
+    ///     for 4+ player tables but a doubled gl (= 4/winds) for 3-player
+    ///     tables -- the "3-player gl is doubled before the *40 + 1" rule
+    ///     mentioned in the legacy formula description. Difficulty average
+    ///     uses the actual player count.</item>
+    /// </list>
+    /// </summary>
+    private static (decimal glScore, decimal glDamp, int diffDenom) GetFactors(
+        Ruleset ruleset, int numberOfWinds, int playerCount) => ruleset switch
     {
-        Ruleset.Mcr => 4m / numberOfWinds,
-        Ruleset.Riichi => 2m / numberOfWinds,
+        Ruleset.Mcr => (4m / numberOfWinds, 4m / numberOfWinds, Math.Max(4, playerCount)),
+        Ruleset.Riichi => (
+            2m / numberOfWinds,
+            (playerCount == 3 ? 4m : 2m) / numberOfWinds,
+            playerCount),
         _ => throw new ArgumentOutOfRangeException(nameof(ruleset), ruleset, "Unknown ruleset."),
     };
 }
