@@ -19,4 +19,8 @@
     <ProjectReference Include="..\..\src\Rating.Domain\Rating.Domain.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <None Update="data\mcr_games_full.json" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
 </Project>

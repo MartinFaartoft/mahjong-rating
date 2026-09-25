@@ -38,11 +38,23 @@ public static class RatingCalculator
         }
 
         var gl = GameLengthFactor(ruleset, numberOfWinds);
-        var damp = 40m * gl;
+        // Damping matches the legacy mahjongdk implementation: 40 * game_length_factor + 1.
+        // The +1 offset is a deliberate deviation from the plain-English spec so that the
+        // new system reproduces historical ratings bit-for-bit when the full game history
+        // is replayed.
+        var damp = 40m * gl + 1m;
 
+        // game_difficulty = average of participants' old ratings, but the legacy
+        // impl assumed a full 4-seat table when computing the denominator: it
+        // divides by max(4, playerCount) rather than playerCount. For the usual
+        // 4+ seat games this is identical to a plain average; for sub-4-seat
+        // tables (only one such game exists in 22 years of history) the legacy
+        // formula pulls diff toward zero. We preserve the quirk so full replay
+        // matches legacy on every game.
+        var denom = Math.Max(4, oldRatings.Count);
         decimal diff = 0m;
         foreach (var r in oldRatings.Values) diff += r;
-        diff /= oldRatings.Count;
+        diff /= denom;
 
         var result = new Dictionary<Guid, decimal>(oldRatings.Count);
         foreach (var (playerId, old) in oldRatings)

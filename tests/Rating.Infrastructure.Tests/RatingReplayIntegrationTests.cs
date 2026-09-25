@@ -36,10 +36,12 @@ public sealed class RatingReplayIntegrationTests(PostgresFixture fx) : IClassFix
 
         var current = (await ratings.GetCurrentAsync(Ruleset.Mcr)).ToDictionary(r => r.PlayerId);
 
-        Assert.Equal(1m, current[p1.Id].Rating);
-        Assert.Equal(-1m, current[p2.Id].Rating);
-        Assert.Equal(0m, current[p3.Id].Rating);
-        Assert.Equal(0m, current[p4.Id].Rating);
+        // Mcr 4-wind: gl=1, damp = 40*gl + 1 = 41. diff=0. Ratings persist as
+        // numeric(18,10), so compare to 10 decimal places.
+        Assert.Equal(40m / 41m, current[p1.Id].Rating, 10);
+        Assert.Equal(-40m / 41m, current[p2.Id].Rating, 10);
+        Assert.Equal(0m, current[p3.Id].Rating, 10);
+        Assert.Equal(0m, current[p4.Id].Rating, 10);
     }
 
     [Fact]
@@ -60,10 +62,11 @@ public sealed class RatingReplayIntegrationTests(PostgresFixture fx) : IClassFix
             Ruleset.Riichi, 1, t0,
             new[] { new GameResultRequest(a.Id, 40, 0), new GameResultRequest(b.Id, -40, 1) }));
 
-        // After G_later: a=1, b=-1 (Riichi 1-wind: gl=2, damp=80, diff=0).
+        // After G_later: Riichi 1-wind => gl=2, damp = 40*gl + 1 = 81, diff=0.
+        //   a = (40*2)/81 = 80/81, b = -80/81.
         var afterFirst = (await ratings.GetCurrentAsync(Ruleset.Riichi)).ToDictionary(r => r.PlayerId);
-        Assert.Equal(1m, afterFirst[a.Id].Rating);
-        Assert.Equal(-1m, afterFirst[b.Id].Rating);
+        Assert.Equal(80m / 81m, afterFirst[a.Id].Rating, 10);
+        Assert.Equal(-80m / 81m, afterFirst[b.Id].Rating, 10);
 
         // Insert G_earlier at t=-1h with a and b starting from 0. This must
         // trigger a replay of G_later using the ratings produced by G_earlier.
@@ -71,16 +74,15 @@ public sealed class RatingReplayIntegrationTests(PostgresFixture fx) : IClassFix
             Ruleset.Riichi, 1, t0.AddHours(-1),
             new[] { new GameResultRequest(a.Id, -40, 0), new GameResultRequest(b.Id, 40, 1) }));
 
-        // Manually compute the expected chain:
-        // G_earlier: gl=2, damp=80, diff=0.
-        //   a_new = 0 + (-40*2 + 0 - 0)/80 = -1
-        //   b_new = 0 + ( 40*2 + 0 - 0)/80 =  1
-        // G_later: diff = avg(-1, 1) = 0.
-        //   a_new = -1 + (40*2 + 0 - (-1))/80 = -1 + 81/80 = -1 + 1.0125 = 0.0125
-        //   b_new =  1 + (-40*2 + 0 - 1)/80 =  1 + (-81/80) = 1 - 1.0125 = -0.0125
+        // Manually compute the expected chain (gl=2, damp=81):
+        //   G_earlier (both old=0, diff=0): a = -80/81, b = 80/81.
+        //   G_later replayed with diff=0:
+        //     a_new = -80/81 + (80 + 80/81)/81
+        //           = (-80*81 + 80*82)/6561 = (-6480 + 6560)/6561 = 80/6561.
+        //     b_new = -80/6561 (by symmetry).
         var final = (await ratings.GetCurrentAsync(Ruleset.Riichi)).ToDictionary(r => r.PlayerId);
-        Assert.Equal(0.0125m, final[a.Id].Rating);
-        Assert.Equal(-0.0125m, final[b.Id].Rating);
+        Assert.Equal(80m / 6561m, final[a.Id].Rating, 10);
+        Assert.Equal(-80m / 6561m, final[b.Id].Rating, 10);
     }
 
     [Fact]
@@ -107,7 +109,8 @@ public sealed class RatingReplayIntegrationTests(PostgresFixture fx) : IClassFix
         await games.DeleteAsync(g1.Id);
 
         var current = (await ratings.GetCurrentAsync(Ruleset.Mcr)).ToDictionary(r => r.PlayerId);
-        Assert.Equal(1m, current[a.Id].Rating);
-        Assert.Equal(-1m, current[b.Id].Rating);
+        // Only one game remains: Mcr 4-wind, gl=1, damp=41, diff=0.
+        Assert.Equal(40m / 41m, current[a.Id].Rating, 10);
+        Assert.Equal(-40m / 41m, current[b.Id].Rating, 10);
     }
 }

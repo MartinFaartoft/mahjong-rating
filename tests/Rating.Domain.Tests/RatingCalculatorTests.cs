@@ -8,10 +8,12 @@ public class RatingCalculatorTests
     private static Guid P(int n) => new($"00000000-0000-0000-0000-{n:D12}");
 
     [Fact]
-    public void Mcr_4Wind_4NewPlayers_MatchesSpecExample()
+    public void Mcr_4Wind_4NewPlayers_MatchesLegacyFormula()
     {
-        // Spec example: 4-wind MCR, all zero old ratings, scores 40/-40/0/0.
-        // Expected new ratings: 1/-1/0/0.
+        // 4-wind MCR: gl = 4/4 = 1, damping = 40*gl + 1 = 41 (matches legacy
+        // mahjongdk impl, verified against the historical dataset).
+        // All zero old ratings, scores 40/-40/0/0 -> diff = 0, deltas =
+        // 40/41, -40/41, 0, 0.
         var old = new Dictionary<Guid, decimal>
         {
             [P(1)] = 0m, [P(2)] = 0m, [P(3)] = 0m, [P(4)] = 0m,
@@ -23,8 +25,8 @@ public class RatingCalculatorTests
 
         var result = RatingCalculator.ComputeNewRatings(Ruleset.Mcr, 4, old, scores);
 
-        Assert.Equal(1m, result[P(1)]);
-        Assert.Equal(-1m, result[P(2)]);
+        Assert.Equal(40m / 41m, result[P(1)]);
+        Assert.Equal(-40m / 41m, result[P(2)]);
         Assert.Equal(0m, result[P(3)]);
         Assert.Equal(0m, result[P(4)]);
     }
@@ -32,24 +34,25 @@ public class RatingCalculatorTests
     [Fact]
     public void Riichi_1Wind_UsesRiichiGameLengthFactor()
     {
-        // Riichi gl = 2/winds. 1 wind -> gl=2, damp=80.
-        // 2 players, both old=0, scores 40/-40.
-        // diff = 0. new_1 = 0 + (40*2 + 0 - 0)/80 = 1. new_2 = -1.
+        // Riichi gl = 2/winds. 1 wind -> gl=2, damp = 40*2 + 1 = 81.
+        // 2 players, both old=0, scores 40/-40. diff = 0.
+        // deltas = (40*2)/81, (-40*2)/81 = 80/81, -80/81.
         var old = new Dictionary<Guid, decimal> { [P(1)] = 0m, [P(2)] = 0m };
         var scores = new Dictionary<Guid, int> { [P(1)] = 40, [P(2)] = -40 };
 
         var result = RatingCalculator.ComputeNewRatings(Ruleset.Riichi, 1, old, scores);
 
-        Assert.Equal(1m, result[P(1)]);
-        Assert.Equal(-1m, result[P(2)]);
+        Assert.Equal(80m / 81m, result[P(1)]);
+        Assert.Equal(-80m / 81m, result[P(2)]);
     }
 
     [Fact]
     public void GameDifficulty_IsAverageOfOldRatings()
     {
-        // 4-wind MCR, gl=1, damp=40.
-        // old = [100, 0, 0, 0] -> diff = 25.
-        // p1 score=0: new = 100 + (0 + 25 - 100)/40 = 100 + (-75/40) = 98.125
+        // 4-wind MCR, gl=1, damp=41. old = [100, 0, 0, 0] -> diff = 25.
+        // All scores 0.
+        // p1: 100 + (0 + 25 - 100)/41 = 100 - 75/41.
+        // p2: 0   + (0 + 25 -   0)/41 =        25/41.
         var old = new Dictionary<Guid, decimal>
         {
             [P(1)] = 100m, [P(2)] = 0m, [P(3)] = 0m, [P(4)] = 0m,
@@ -61,10 +64,8 @@ public class RatingCalculatorTests
 
         var result = RatingCalculator.ComputeNewRatings(Ruleset.Mcr, 4, old, scores);
 
-        Assert.Equal(98.125m, result[P(1)]);
-        // Low-rated players regress toward the mean by the same recurrence.
-        // new = 0 + (0 + 25 - 0)/40 = 0.625
-        Assert.Equal(0.625m, result[P(2)]);
+        Assert.Equal(100m - 75m / 41m, result[P(1)]);
+        Assert.Equal(25m / 41m, result[P(2)]);
     }
 
     [Fact]
