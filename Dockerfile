@@ -1,10 +1,14 @@
 # syntax=docker/dockerfile:1.7
 FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
 WORKDIR /src
-COPY Rating.csproj ./
-RUN dotnet restore
+COPY Rating.sln ./
+COPY src/Rating.Domain/Rating.Domain.csproj src/Rating.Domain/
+COPY src/Rating.Application/Rating.Application.csproj src/Rating.Application/
+COPY src/Rating.Infrastructure/Rating.Infrastructure.csproj src/Rating.Infrastructure/
+COPY src/Rating.Api/Rating.Api.csproj src/Rating.Api/
+RUN dotnet restore Rating.sln
 COPY . .
-RUN dotnet publish Rating.csproj -c Release -o /app --no-restore /p:UseAppHost=false
+RUN dotnet publish src/Rating.Api/Rating.Api.csproj -c Release -o /app --no-restore /p:UseAppHost=false
 
 FROM mcr.microsoft.com/dotnet/aspnet:10.0
 WORKDIR /app

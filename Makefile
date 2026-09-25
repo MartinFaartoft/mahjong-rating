@@ -20,7 +20,7 @@ dev: gen
 	@echo "next: make run"
 
 run:
-	dotnet run
+	dotnet run --project src/Rating.Api
 
 down:
 	docker compose -f docker-compose.dev.yml down
