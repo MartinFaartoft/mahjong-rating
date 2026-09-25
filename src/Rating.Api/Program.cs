@@ -83,3 +83,8 @@ app.MapGet("/probe", async (AppDbContext db, ILogger<Program> logger) =>
 app.MapControllers();
 
 app.Run();
+
+// Make the implicit Program class visible to WebApplicationFactory in the
+// Api integration tests. Top-level statements otherwise generate an
+// internal Program with no accessible entry point for the test host.
+public partial class Program;

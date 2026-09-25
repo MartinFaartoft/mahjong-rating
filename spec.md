@@ -27,27 +27,33 @@
 ### Rating calculation
 - As a user, I want to see a list of current ratings for each player, for a given ruleset
 
-- When a game is added, updated, or deleted, the rating for each player in that game should be updated, using the following formula: 
-player_new_rating = player_old_rating + (player_score * game_length_factor + game_difficulty - player_old_rating) / damping_factor, where: 
+- When a game is added, updated, or deleted, the rating for each player in that game (and every subsequent game for the same ruleset) is recomputed from the affected timestamp forward. The formula reproduces the legacy mahjongdk.dk implementation bit-for-bit so historical ratings replay unchanged; it deviates from the naive spec in a few documented places (see below).
 
-player_old_rating is the players current rating (or 0 for their first game)
+Per-player, per-game update:
 
-game_difficulty is the average of player_old_rating for all participating players
+    player_new_rating = player_old_rating + (player_score * gl_score + game_difficulty - player_old_rating) / damping_factor
 
-game_length_factor = 4 / number_of_winds (for MCR) and 2 / number_of_winds for Riichi,
+where:
 
-damping_factor = 40 * game_length_factor
+- `player_old_rating` — the player's current rating (or 0 for their first game).
 
-A simple example would be a 4 wind MCR game, with new players (player_old_rating = 0) with the following scores:
-player_1 = 40
-player_2 = -40
-player_3 = 0
-player_4 = 0
+- `gl_score` — score multiplier:
+    - MCR: `4 / number_of_winds`
+    - Riichi: `2 / number_of_winds`
 
-which should yield the following new ratings:
-player_1 = 1
-player_2 = -1
-player_3 = 0
-player_4 = 0
+- `gl_damp` — damping multiplier:
+    - MCR: `4 / number_of_winds` (same as `gl_score`)
+    - Riichi 4+ player table: `2 / number_of_winds` (same as `gl_score`)
+    - Riichi 3-player table: `4 / number_of_winds` (doubled — Sanma damping quirk)
 
-- A rating history should be kept for each player, enabling forward recompute of ratings, when a game is added, changed or deleted
+- `damping_factor = 40 * gl_damp + 1` (the `+1` matches the legacy impl and is intentional)
+
+- `game_difficulty` — average of `player_old_rating` for all participants, using the following denominator:
+    - MCR: `max(4, player_count)` (the legacy impl assumed a full 4-seat table; only affects sub-4 tables, of which one exists in the entire 22-year MCR archive)
+    - Riichi: `player_count`
+
+Legacy-parity is validated end-to-end by `LegacyDatasetReplayTests`, which replays the full 22-year mahjongdk archive (10k+ MCR games, 10k+ Riichi games) through `RatingCalculator` and asserts every per-player-per-game rating matches legacy within 1e-9 relative tolerance.
+
+A rating history is kept for each player, enabling forward recompute of ratings when a game is added, changed, or deleted.
+
+Ratings are computed and stored in `decimal` (28-digit precision). The database column is `numeric(18,10)`; API responses round to 4 decimal places at the edge.
